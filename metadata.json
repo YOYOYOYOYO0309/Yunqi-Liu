@@ -1,0 +1,5 @@
+{
+  "name": "SilicaSense Monitor",
+  "description": "Smart foot health monitoring application tracking temperature and moisture levels using silica gel color analysis via Bluetooth Sensor.",
+  "requestFramePermissions": []
+}
