@@ -1,5 +1,6 @@
 export enum MoistureStatus {
   DRY = 'DRY',
+  MIXED = 'MIXED',
   WET = 'WET',
   UNKNOWN = 'UNKNOWN'
 }

@@ -9,12 +9,17 @@ interface HistoryChartProps {
 const HistoryChart: React.FC<HistoryChartProps> = ({ data }) => {
   
   // Prepare data for display
-  const chartData = data.map(r => ({
-    time: r.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    temp: r.temperature,
-    // Map moisture status to a number for charting
-    moistureLevel: r.moisture === MoistureStatus.WET ? 1 : 0 
-  })).slice(-10); // Show last 10 readings
+  const chartData = data.map(r => {
+    let moistureVal = 0;
+    if (r.moisture === MoistureStatus.WET) moistureVal = 1;
+    else if (r.moisture === MoistureStatus.MIXED) moistureVal = 0.5;
+    
+    return {
+      time: r.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      temp: r.temperature,
+      moistureLevel: moistureVal
+    };
+  }).slice(-10); // Show last 10 readings
 
   if (chartData.length === 0) return null;
 
@@ -61,7 +66,7 @@ const HistoryChart: React.FC<HistoryChartProps> = ({ data }) => {
             strokeWidth={2} 
             strokeDasharray="5 5"
             dot={false}
-            name="Moisture (1=Wet)"
+            name="Moisture (1=Wet, 0.5=Mixed)"
           />
         </LineChart>
       </ResponsiveContainer>

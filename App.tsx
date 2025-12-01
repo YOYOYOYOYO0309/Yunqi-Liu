@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Thermometer, Droplets, Bluetooth, BluetoothConnected, BellRing, Activity, RefreshCw } from 'lucide-react';
+import { Thermometer, Droplets, Bluetooth, BluetoothConnected, BellRing, Activity } from 'lucide-react';
 import SensorCard from './components/SensorCard';
 import HistoryChart from './components/HistoryChart';
 import { MoistureStatus, Reading, ConnectionStatus, BluetoothDevice, BluetoothRemoteGATTCharacteristic } from './types';
@@ -23,7 +23,6 @@ const App: React.FC = () => {
   // Bluetooth Refs
   const deviceRef = useRef<BluetoothDevice | null>(null);
   const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
-  const pollTimerRef = useRef<number | null>(null);
 
   // Request Notification Permission on Mount
   useEffect(() => {
@@ -52,7 +51,7 @@ const App: React.FC = () => {
 
   // Core Logic: Process a Data String (from BT or Sim)
   const processData = useCallback((dataString: string) => {
-    // Expected format: "37.5,DRY" or "37.5,WET"
+    // Expected format: "37.5,DRY" or "37.5,WET" or "37.5,MIXED"
     const parts = dataString.split(',');
     let temp = 0;
     let moisture = MoistureStatus.UNKNOWN;
@@ -60,11 +59,17 @@ const App: React.FC = () => {
     if (parts.length >= 2) {
       temp = parseFloat(parts[0]);
       const moistureStr = parts[1].trim().toUpperCase();
-      moisture = moistureStr === 'WET' ? MoistureStatus.WET : MoistureStatus.DRY;
+      
+      if (moistureStr === 'WET') moisture = MoistureStatus.WET;
+      else if (moistureStr === 'MIXED') moisture = MoistureStatus.MIXED;
+      else moisture = MoistureStatus.DRY;
+      
     } else {
       // Fallback parsing if format differs
       temp = parseFloat(dataString) || 0;
-      moisture = dataString.includes('WET') ? MoistureStatus.WET : MoistureStatus.DRY;
+      if (dataString.includes('WET')) moisture = MoistureStatus.WET;
+      else if (dataString.includes('MIXED')) moisture = MoistureStatus.MIXED;
+      else moisture = MoistureStatus.DRY;
     }
 
     const newReading: Reading = {
@@ -77,17 +82,19 @@ const App: React.FC = () => {
     setLatestReading(newReading);
     setReadings(prev => [...prev, newReading].slice(-20)); // Keep last 20
 
-    // Logic: If Wet -> Notify immediately
+    // Logic: Poll rates and Notifications based on status
     if (moisture === MoistureStatus.WET) {
       triggerNotification("Excessive moisture detected! Silica gel is saturated.");
-      // If wet, we might want to poll faster to see when it dries, 
-      // but the requirement is mostly about the 5 min update for dry.
-      // We'll set a shorter interval (e.g., 30s) to monitor the active wet state.
+      // If wet, poll faster to see active changes
       setNextUpdateIn(30); 
-    } else {
+    } else if (moisture === MoistureStatus.MIXED) {
+      // Mixed: No alarm yet, but poll faster than dry to catch the transition to wet
       setNotification(null);
-      // Logic: If Dry -> Update every 5 minutes
-      setNextUpdateIn(300);
+      setNextUpdateIn(120); // 2 minutes
+    } else {
+      // Dry: Standard poll rate
+      setNotification(null);
+      setNextUpdateIn(300); // 5 minutes
     }
   }, [triggerNotification]);
 
@@ -135,7 +142,11 @@ const App: React.FC = () => {
     if (isSimulationMode) {
       // Simulation Logic
       const simTemp = (36 + Math.random() * 1.5).toFixed(1);
-      const simMoisture = Math.random() > 0.7 ? "WET" : "DRY";
+      const rand = Math.random();
+      let simMoisture = "DRY";
+      if (rand > 0.8) simMoisture = "WET";
+      else if (rand > 0.6) simMoisture = "MIXED";
+
       processData(`${simTemp},${simMoisture}`);
       return;
     }
@@ -196,6 +207,24 @@ const App: React.FC = () => {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const getMoistureColor = (status?: MoistureStatus) => {
+    switch (status) {
+      case MoistureStatus.WET: return 'red';
+      case MoistureStatus.MIXED: return 'orange';
+      case MoistureStatus.DRY: return 'green';
+      default: return 'gray';
+    }
+  };
+
+  const getMoistureText = (status?: MoistureStatus) => {
+     switch (status) {
+      case MoistureStatus.WET: return 'Moisture Detected';
+      case MoistureStatus.MIXED: return 'Mixed Levels';
+      case MoistureStatus.DRY: return 'Silica Gel Dry';
+      default: return 'Waiting for Data';
+    }
   };
 
   return (
@@ -280,8 +309,8 @@ const App: React.FC = () => {
             title="Moisture"
             value={latestReading?.moisture || '--'}
             icon={Droplets}
-            statusColor={latestReading?.moisture === MoistureStatus.WET ? 'red' : 'green'}
-            subtext={latestReading?.moisture === MoistureStatus.DRY ? 'Silica Gel Dry' : 'Moisture Detected'}
+            statusColor={getMoistureColor(latestReading?.moisture)}
+            subtext={getMoistureText(latestReading?.moisture)}
           />
         </div>
 

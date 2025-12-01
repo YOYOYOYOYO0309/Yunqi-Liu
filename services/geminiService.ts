@@ -19,8 +19,8 @@ export const analyzeSilicaGelImage = async (base64Image: string): Promise<Gemini
         },
         {
           text: `Analyze this image of a silica gel packet or color changing moisture indicator. 
-                 Determine if it indicates "DRY" or "WET" conditions based on the color.
-                 Commonly: Blue/Orange is Dry. Pink/Green/Clear is Wet.
+                 Determine if it indicates "DRY", "MIXED", or "WET" conditions based on the color.
+                 Commonly: Blue/Orange is Dry. Pink/Green/Clear is Wet. A mixture of colors or a transitional color implies Mixed.
                  Return the status, a confidence score (0-100), and a short description of the color you see.`
         }
       ],
@@ -31,7 +31,7 @@ export const analyzeSilicaGelImage = async (base64Image: string): Promise<Gemini
           properties: {
             status: {
               type: Type.STRING,
-              enum: [MoistureStatus.DRY, MoistureStatus.WET, MoistureStatus.UNKNOWN],
+              enum: [MoistureStatus.DRY, MoistureStatus.MIXED, MoistureStatus.WET, MoistureStatus.UNKNOWN],
               description: "The moisture status based on color."
             },
             confidence: {
