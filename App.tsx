@@ -1,16 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Thermometer, Droplets, Bluetooth, BluetoothConnected, BellRing, Activity } from 'lucide-react';
+import { Thermometer, Droplets, Bluetooth, BluetoothConnected, BellRing, Activity, AlertCircle, XCircle } from 'lucide-react';
 import SensorCard from './components/SensorCard';
 import HistoryChart from './components/HistoryChart';
 import { MoistureStatus, Reading, ConnectionStatus, BluetoothDevice, BluetoothRemoteGATTCharacteristic } from './types';
 
-// UUIDs for the Arduino Service (Standard HM-10)
-// We define both long and short forms to ensure browser compatibility
-const SERVICE_UUID_LONG = '0000ffe0-0000-1000-8000-00805f9b34fb'; 
-const SERVICE_UUID_SHORT = 0xFFE0; 
-
-const CHARACTERISTIC_UUID_LONG = '0000ffe1-0000-1000-8000-00805f9b34fb';
-const CHARACTERISTIC_UUID_SHORT = 0xFFE1;
+// Standard HM-10 UUIDs (Lowercase 128-bit)
+const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb'; 
+const CHARACTERISTIC_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
 
 const App: React.FC = () => {
   // Application State
@@ -18,6 +14,7 @@ const App: React.FC = () => {
   const [readings, setReadings] = useState<Reading[]>([]);
   const [latestReading, setLatestReading] = useState<Reading | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   // Polling & Timer State
   const [nextUpdateIn, setNextUpdateIn] = useState<number>(0);
@@ -88,14 +85,11 @@ const App: React.FC = () => {
     // Logic: Poll rates and Notifications based on status
     if (moisture === MoistureStatus.WET) {
       triggerNotification("Excessive moisture detected! Silica gel is saturated.");
-      // If wet, poll faster to see active changes
       setNextUpdateIn(30); 
     } else if (moisture === MoistureStatus.MIXED) {
-      // Mixed: No alarm yet, but poll faster than dry to catch the transition to wet
       setNotification(null);
       setNextUpdateIn(120); // 2 minutes
     } else {
-      // Dry: Standard poll rate
       setNotification(null);
       setNextUpdateIn(300); // 5 minutes
     }
@@ -104,49 +98,52 @@ const App: React.FC = () => {
   // Bluetooth: Connect
   const connectBluetooth = async () => {
     try {
+      setErrorMessage(null);
       setConnectionStatus('connecting');
       setIsSimulationMode(false);
 
+      // 1. Request Device
       console.log("Requesting Bluetooth Device...");
-
       // @ts-ignore - navigator.bluetooth is experimental
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
-        // IMPORTANT: We must list all services we plan to access here
-        optionalServices: [SERVICE_UUID_LONG, SERVICE_UUID_SHORT]
+        // We include 'ffe0' (short) and the full UUID to cover all bases
+        optionalServices: [SERVICE_UUID, 'ffe0', 0xFFE0]
       });
 
       console.log("Device selected:", device.name);
       deviceRef.current = device;
       device.addEventListener('gattserverdisconnected', onDisconnected);
 
+      // 2. Connect to GATT Server
       console.log("Connecting to GATT Server...");
       const server = await device.gatt.connect();
       
+      // 3. Get Service
       console.log("Getting Primary Service...");
       let service;
       try {
-        // Try long UUID first
-        service = await server.getPrimaryService(SERVICE_UUID_LONG);
+        service = await server.getPrimaryService(SERVICE_UUID);
       } catch (e) {
-        console.warn("Long UUID not found, trying short UUID...", e);
+        console.warn("Full UUID failed, trying short 'ffe0'...", e);
         try {
-          service = await server.getPrimaryService(SERVICE_UUID_SHORT);
+          service = await server.getPrimaryService(0xFFE0);
         } catch (e2) {
-           console.error("Service not found. Listing available services is not possible in browser due to security, but ensure your Arduino is broadcasting service: 0000ffe0 or FFE0");
-           throw new Error("Service Not Found. Please ensure you selected the correct 'HMSoft' or 'BT05' device, and not your computer/headphones.");
+           console.error("Service not found.");
+           throw new Error("Could not find the HM-10 Service (FFE0). Is the device powered on?");
         }
       }
 
+      // 4. Get Characteristic
       console.log("Getting Characteristic...");
       let characteristic;
       try {
-        characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_LONG);
+        characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
       } catch (e) {
          try {
-           characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_SHORT);
+           characteristic = await service.getCharacteristic(0xFFE1);
          } catch (e2) {
-           throw new Error("Characteristic Not Found. The device has the service but not the data characteristic (FFE1).");
+           throw new Error("Connected, but could not find Data Characteristic (FFE1).");
          }
       }
       
@@ -154,7 +151,7 @@ const App: React.FC = () => {
       setConnectionStatus('connected');
       console.log("Connected successfully!");
       
-      // Perform immediate read upon connection
+      // Perform immediate read
       await fetchReading();
 
     } catch (error: any) {
@@ -163,12 +160,25 @@ const App: React.FC = () => {
       
       let msg = "Failed to connect.";
       if (error.name === 'NotFoundError') {
-        msg = "User cancelled the selection.";
+        msg = ""; // User just cancelled, no error needed
+      } else if (error.name === 'SecurityError') {
+        msg = "Security blocked. Ensure you are using HTTPS or localhost.";
+      } else if (error.name === 'NetworkError') {
+        msg = "Connection failed. Please UNPAIR the device from your phone settings and try again.";
       } else if (error.message) {
         msg = error.message;
       }
       
-      alert(msg);
+      if (msg) setErrorMessage(msg);
+    }
+  };
+
+  const disconnectDevice = () => {
+    if (deviceRef.current && deviceRef.current.gatt.connected) {
+      deviceRef.current.gatt.disconnect();
+    } else {
+      // Force cleanup if already technically disconnected
+      onDisconnected();
     }
   };
 
@@ -204,7 +214,7 @@ const App: React.FC = () => {
       processData(dataString);
     } catch (err) {
       console.error("Read Error:", err);
-      // Optional: attempt reconnect or ignore
+      setErrorMessage("Failed to read data. Device might be out of range.");
     }
   }, [isSimulationMode, processData]);
 
@@ -216,7 +226,6 @@ const App: React.FC = () => {
       setNextUpdateIn(prev => {
         if (prev <= 1) {
           fetchReading();
-          // Reset will happen inside processData based on result
           return 5; // Temporary buffer
         }
         return prev - 1;
@@ -226,12 +235,6 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [connectionStatus, isSimulationMode, fetchReading]);
 
-  // Initial Setup for Demo
-  useEffect(() => {
-    // Start in sim mode for demonstration if needed, or wait for user
-    // We'll wait for user action to keep it clean.
-  }, []);
-
   const toggleSimulation = () => {
     if (isSimulationMode) {
       setIsSimulationMode(false);
@@ -240,8 +243,8 @@ const App: React.FC = () => {
       setLatestReading(null);
     } else {
       setIsSimulationMode(true);
-      setConnectionStatus('connected'); // Fake connection
-      setNextUpdateIn(1); // Trigger immediate read
+      setConnectionStatus('connected');
+      setNextUpdateIn(1);
     }
   };
 
@@ -309,13 +312,27 @@ const App: React.FC = () => {
             )}
           </div>
 
-          {connectionStatus !== 'connected' && (
+          {errorMessage && (
+            <div className="mb-4 rounded-lg bg-red-50 p-3 text-xs text-red-700 border border-red-100 flex items-start gap-2">
+              <AlertCircle size={16} className="shrink-0 mt-0.5" />
+              <p>{errorMessage}</p>
+            </div>
+          )}
+
+          {connectionStatus !== 'connected' ? (
             <button 
               onClick={connectBluetooth}
               disabled={connectionStatus === 'connecting'}
               className="w-full flex items-center justify-center gap-2 rounded-lg bg-slate-900 py-3 text-sm font-semibold text-white transition-transform active:scale-95 disabled:opacity-50"
             >
               {connectionStatus === 'connecting' ? 'Connecting...' : 'Connect to Device'}
+            </button>
+          ) : (
+             <button 
+              onClick={disconnectDevice}
+              className="w-full flex items-center justify-center gap-2 rounded-lg bg-red-100 py-2 text-sm font-semibold text-red-700 hover:bg-red-200 transition-colors"
+            >
+              <XCircle size={16} /> Disconnect
             </button>
           )}
 
