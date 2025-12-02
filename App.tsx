@@ -4,10 +4,13 @@ import SensorCard from './components/SensorCard';
 import HistoryChart from './components/HistoryChart';
 import { MoistureStatus, Reading, ConnectionStatus, BluetoothDevice, BluetoothRemoteGATTCharacteristic } from './types';
 
-// UUIDs for the Arduino Service (Standard HM-10 or Custom)
-// NOTE: These should match your Arduino's BLE Service/Characteristic UUIDs
-const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb'; 
-const CHARACTERISTIC_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
+// UUIDs for the Arduino Service (Standard HM-10)
+// We define both long and short forms to ensure browser compatibility
+const SERVICE_UUID_LONG = '0000ffe0-0000-1000-8000-00805f9b34fb'; 
+const SERVICE_UUID_SHORT = 0xFFE0; 
+
+const CHARACTERISTIC_UUID_LONG = '0000ffe1-0000-1000-8000-00805f9b34fb';
+const CHARACTERISTIC_UUID_SHORT = 0xFFE1;
 
 const App: React.FC = () => {
   // Application State
@@ -39,7 +42,7 @@ const App: React.FC = () => {
     if ('Notification' in window && Notification.permission === 'granted') {
       new Notification("SilicaSense Alert", {
         body: message,
-        icon: '/icon.png' // Assumes generic icon available or uses browser default
+        icon: '/icon.png'
       });
     }
 
@@ -104,33 +107,73 @@ const App: React.FC = () => {
       setConnectionStatus('connecting');
       setIsSimulationMode(false);
 
+      console.log("Requesting Bluetooth Device...");
+
       // @ts-ignore - navigator.bluetooth is experimental
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
-        optionalServices: [SERVICE_UUID]
+        // IMPORTANT: We must list all services we plan to access here
+        optionalServices: [SERVICE_UUID_LONG, SERVICE_UUID_SHORT]
       });
 
+      console.log("Device selected:", device.name);
       deviceRef.current = device;
       device.addEventListener('gattserverdisconnected', onDisconnected);
 
+      console.log("Connecting to GATT Server...");
       const server = await device.gatt.connect();
-      const service = await server.getPrimaryService(SERVICE_UUID);
-      const characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+      
+      console.log("Getting Primary Service...");
+      let service;
+      try {
+        // Try long UUID first
+        service = await server.getPrimaryService(SERVICE_UUID_LONG);
+      } catch (e) {
+        console.warn("Long UUID not found, trying short UUID...", e);
+        try {
+          service = await server.getPrimaryService(SERVICE_UUID_SHORT);
+        } catch (e2) {
+           console.error("Service not found. Listing available services is not possible in browser due to security, but ensure your Arduino is broadcasting service: 0000ffe0 or FFE0");
+           throw new Error("Service Not Found. Please ensure you selected the correct 'HMSoft' or 'BT05' device, and not your computer/headphones.");
+        }
+      }
+
+      console.log("Getting Characteristic...");
+      let characteristic;
+      try {
+        characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_LONG);
+      } catch (e) {
+         try {
+           characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_SHORT);
+         } catch (e2) {
+           throw new Error("Characteristic Not Found. The device has the service but not the data characteristic (FFE1).");
+         }
+      }
       
       characteristicRef.current = characteristic;
       setConnectionStatus('connected');
+      console.log("Connected successfully!");
       
       // Perform immediate read upon connection
       await fetchReading();
 
-    } catch (error) {
-      console.error("Bluetooth Error:", error);
+    } catch (error: any) {
+      console.error("Bluetooth Connection Error:", error);
       setConnectionStatus('disconnected');
-      alert("Failed to connect. Ensure your device is on and nearby.");
+      
+      let msg = "Failed to connect.";
+      if (error.name === 'NotFoundError') {
+        msg = "User cancelled the selection.";
+      } else if (error.message) {
+        msg = error.message;
+      }
+      
+      alert(msg);
     }
   };
 
   const onDisconnected = () => {
+    console.log("Device disconnected");
     setConnectionStatus('disconnected');
     deviceRef.current = null;
     characteristicRef.current = null;
@@ -157,6 +200,7 @@ const App: React.FC = () => {
       const value = await characteristicRef.current.readValue();
       const decoder = new TextDecoder('utf-8');
       const dataString = decoder.decode(value);
+      console.log("Data Received:", dataString);
       processData(dataString);
     } catch (err) {
       console.error("Read Error:", err);
